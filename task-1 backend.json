@@ -1,0 +1,128 @@
+{
+    "name": "crypto-stats",
+    "version": "1.0.0",
+    "description": "Crypto tracking app with background job and stats API",
+    "main": "src/app.js",
+    "scripts": {
+      "start": "node src/app.js"
+    },
+    "dependencies": {
+      "axios": "^1.4.0",
+      "express": "^4.18.2",
+      "mongoose": "^7.5.2",
+      "node-cron": "^3.0.2"
+    }
+  }
+  const mongoose = require('mongoose');
+
+  const cryptoDataSchema = new mongoose.Schema({
+    coin: { type: String, required: true },
+    price_usd: { type: Number, required: true },
+    market_cap_usd: { type: Number, required: true },
+    change_24h: { type: Number, required: true },
+    timestamp: { type: Date, default: Date.now },
+  });
+  
+  module.exports = mongoose.model('CryptoData', cryptoDataSchema);
+  const axios = require('axios');
+  const CryptoData = require('../models/CryptoData');
+  
+  const fetchCryptoData = async () => {
+    try {
+      const coins = ['bitcoin', 'matic-network', 'ethereum'];
+      const url = `https://api.coingecko.com/api/v3/simple/price`;
+      const response = await axios.get(url, {
+        params: {
+          ids: coins.join(','),
+          vs_currencies: 'usd',
+          include_market_cap: true,
+          include_24hr_change: true,
+        },
+      });
+  
+      const data = response.data;
+  
+      for (const coin of coins) {
+        const crypto = {
+          coin,
+          price_usd: data[coin].usd,
+          market_cap_usd: data[coin].usd_market_cap,
+          change_24h: data[coin].usd_24h_change,
+        };
+  
+        // Store in the database
+        await CryptoData.findOneAndUpdate(
+          { coin },
+          crypto,
+          { upsert: true, new: true }
+        );
+      }
+  
+      console.log('Crypto data fetched and stored successfully');
+    } catch (error) {
+      console.error('Error fetching crypto data:', error.message);
+    }
+  };
+  
+  module.exports = fetchCryptoData;
+  const express = require('express');
+  const CryptoData = require('../models/CryptoData');
+  const router = express.Router();
+  
+  // GET /stats
+  router.get('/stats', async (req, res) => {
+    const { coin } = req.query;
+  
+    if (!coin || !['bitcoin', 'matic-network', 'ethereum'].includes(coin)) {
+      return res.status(400).json({ error: 'Invalid or missing coin parameter' });
+    }
+  
+    try {
+      const cryptoData = await CryptoData.findOne({ coin }).sort({ timestamp: -1 });
+      if (!cryptoData) {
+        return res.status(404).json({ error: 'Data not found for the requested coin' });
+      }
+  
+      res.json(cryptoData);
+    } catch (error) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+  
+  module.exports = router;
+  const express = require('express');
+  const mongoose = require('mongoose');
+  const cron = require('node-cron');
+  const fetchCryptoData = require('./jobs/fetchCryptoData');
+  const statsRoutes = require('./routes/stats');
+  
+  const app = express();
+  app.use(express.json());
+  
+  // MongoDB connection
+  mongoose
+    .connect('mongodb://127.0.0.1:27017/cryptoDB', {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    })
+    .then(() => console.log('MongoDB connected'))
+    .catch((err) => console.error('MongoDB connection error:', err));
+  
+  // Routes
+  app.use('/api', statsRoutes);
+  
+  // Schedule the fetchCryptoData job to run every 2 hours
+  cron.schedule('0 */2 * * *', fetchCryptoData);
+  
+  // Start the server
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  GET http://localhost:3000/api/stats?coin=bitcoin
+  {
+    "coin": "bitcoin",
+    "price_usd": 42000.5,
+    "market_cap_usd": 800000000,
+    "change_24h": 2.3,
+    "timestamp": "2025-01-11T12:00:00Z"
+  }
+            
